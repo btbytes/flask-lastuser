@@ -14,7 +14,7 @@ from functools import wraps
 from base64 import b64encode
 import uuid
 import urlparse
-import httplib2
+import requests
 import urllib
 import re
 
@@ -87,7 +87,6 @@ class Lastuser(object):
         self.getuser_userid_endpoint = app.config.get('LASTUSER_ENDPOINT_GETUSER_USERID', 'api/1/user/get_by_userid')
         self.client_id = app.config['LASTUSER_CLIENT_ID']
         self.client_secret = app.config['LASTUSER_CLIENT_SECRET']
-
         self.app.before_request(self.before_request)
 
     def init_usermanager(self, um):
@@ -218,20 +217,17 @@ class Lastuser(object):
             # Validations done
 
             # Step 2: Get the auth token
-            http = httplib2.Http(cache=None, timeout=None, proxy_info=None)
-            http_response, http_content = http.request(urlparse.urljoin(self.lastuser_server, self.token_endpoint),
-                'POST',
+            http_response = requests.post(urlparse.urljoin(self.lastuser_server, self.token_endpoint),
                 headers={'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
                          'Authorization': 'Basic %s' % b64encode("%s:%s" % (self.client_id, self.client_secret))},
-                body=urllib.urlencode({
+                params={
                     'code': code,
                     'redirect_uri': session.get('lastuser_redirect_uri'),
                     'grant_type': 'authorization_code',
                     'scope': self._login_handler().get('scope', '')
-                    })
+                    }
                 )
-
-            result = json.loads(http_content)
+            result = json.loads(http_response.text)
 
             # Step 2.1: Remove temporary session variables
             session.pop('lastuser_redirect_uri', None)
@@ -285,16 +281,16 @@ class Lastuser(object):
         return decorated_function
 
     def _lastuser_api_call(self, endpoint, **kwargs):
-        # Check this token with Lastuser's verify_token endpoint
-        http = httplib2.Http(cache=None, timeout=None, proxy_info=None)
-        http_response, http_content = http.request(urlparse.urljoin(self.lastuser_server, endpoint), 'POST',
+        # Check this token with LastUser's verify_token endpoint
+        http_response = requests.post(urlparse.urljoin(self.lastuser_server, endpoint),
             headers={'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
                      'Authorization': 'Basic %s' % b64encode("%s:%s" % (self.client_id, self.client_secret))},
-            body=urllib.urlencode(kwargs))
-        if http_response.status in (400, 500, 401):
+            params=kwargs)
+        if http_response.status_code in (400, 500, 401):
             abort(500)
-        elif http_response.status == 200:
-            return json.loads(http_content)
+        elif http_response.status_code == 200:
+            return json.loads(http_response.text)
+
 
     def resource_handler(self, resource_name):
         """
@@ -366,7 +362,6 @@ class Lastuser(object):
         resource_details = self.external_resources[name]
         endpoint = resource_details['endpoint']
 
-        http = httplib2.Http(cache=None, timeout=None, proxy_info=None)
         # XXX: We assume a user object that provides attribute access
         if g.user.lastuser_token_type != 'bearer':
             raise LastuserResourceException("Unsupported token type.")
@@ -385,21 +380,23 @@ class Lastuser(object):
             queryparts.extend(kw.items())
             urlparts[3] = urllib.urlencode(queryparts)
             endpoint = urlparse.urlunsplit(urlparts)
-            http_response, http_content = http.request(endpoint, resource_details['method'],
+            http_response = requests.get(endpoint, resource_details['method'],
                 headers=headers)
+
         else:
-            body = urllib.urlencode(kw)
             headers['Content-Type'] = 'application/x-www-form-urlencoded;charset=UTF-8'
-            http_response, http_content = http.request(endpoint, resource_details['method'],
-                headers=headers, body=body)
+            if resource_details['method'] in ('POST', 'post'):
+                http_response = requests.post(endpoint, headers=headers, data=kw)
+            else:
+                http_response = requests.get(endpoint, headers=headers, params=kw)
         # Parse the result
-        if http_response.status != 200:
+        if http_response.status_code != 200:
             # XXX: What other status codes could we possibly get from a REST call?
-            raise LastuserResourceException("Resource returned status %d." % http_response.status)
+            raise LastuserResourceException("Resource returned status %d." % http_response.status_code)
         if http_response.get('content-type') in ['text/json', 'application/json']:
-            result = json.loads(http_content)
+            result = json.loads(http_response.text)
         else:
-            result = http_content
+            result = http_response
         return result
 
 # Compatibility name

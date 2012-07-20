@@ -35,6 +35,7 @@ setup(
         'httplib2',
         'SQLAlchemy',
         'coaster',
+        'requests',
     ],
     classifiers=[
         'Development Status :: 4 - Beta',
